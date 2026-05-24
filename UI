@@ -1,0 +1,631 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, simpledialog
+import KURSOVA
+import os
+import json
+
+
+class CryptoApp:
+
+    def __init__(self, root):
+
+        self.root = root
+        self.root.title("Crypto Protection System")
+        self.root.geometry("1024x650")
+
+        if not KURSOVA.system_exists():
+
+            password = simpledialog.askstring(
+                "Ініціалізація",
+                "Створення нової системи.\n"
+                "Введіть пароль для захисту приватного ключа:",
+                show="*"
+            )
+
+            if not password:
+                root.destroy()
+                return
+
+            KURSOVA.create_new_system(password)
+
+            messagebox.showinfo(
+                "Успіх",
+                "Систему створено."
+            )
+
+        self.public_key = KURSOVA.get_public_key()
+        self.private_key = None
+
+        self.create_widgets()
+
+
+    def create_widgets(self):
+
+        title = tk.Label(
+            self.root,
+            text="Crypto Protection System",
+            font=("Arial", 16)
+        )
+        title.pack(pady=10)
+
+        info_frame = tk.LabelFrame(self.root, text="Інформація")
+        info_frame.pack(pady=5, padx=10, fill="x")
+
+        tk.Label(
+            info_frame,
+            text="Система використовує RSA + AES-GCM"
+        ).pack(anchor="w", padx=5)
+
+        tk.Label(
+            info_frame,
+            text="Для розшифрування потрібен пароль."
+        ).pack(anchor="w", padx=5)
+
+        frame_ops = tk.LabelFrame(
+            self.root,
+            text="Основні операції"
+        )
+        frame_ops.pack(pady=5, padx=10, fill="x")
+
+        self.btn_encrypt = tk.Button(
+            frame_ops,
+            text="Зашифрувати директорію",
+            command=self.encrypt_action
+        )
+        self.btn_encrypt.pack(pady=5, padx=10, fill="x")
+
+        self.btn_decrypt = tk.Button(
+            frame_ops,
+            text="Розшифрувати директорію",
+            command=self.decrypt_action
+        )
+        self.btn_decrypt.pack(pady=5, padx=10, fill="x")
+
+        frame_settings = tk.LabelFrame(
+            self.root,
+            text="Налаштування системи"
+        )
+        frame_settings.pack(pady=5, padx=10, fill="x")
+
+        self.btn_add_keyword = tk.Button(
+            frame_settings,
+            text="+ Додати ключове слово",
+            command=self.add_keyword_action
+        )
+        self.btn_add_keyword.pack(pady=3, padx=10, fill="x")
+
+        self.btn_add_extension = tk.Button(
+            frame_settings,
+            text="+ Додати розширення",
+            command=self.add_extension_action
+        )
+        self.btn_add_extension.pack(pady=3, padx=10, fill="x")
+
+        self.btn_add_dir = tk.Button(
+            frame_settings,
+            text="+ Додати важливу папку",
+            command=self.add_important_dir_action
+        )
+        self.btn_add_dir.pack(pady=3, padx=10, fill="x")
+
+        btn_view_settings = tk.Button(
+            frame_settings,
+            text="Переглянути налаштування",
+            command=self.view_settings_action
+        )
+        btn_view_settings.pack(pady=3, padx=10, fill="x")
+
+        self.btn_reset = tk.Button(
+            frame_settings,
+            text="Скинути налаштування",
+            command=self.reset_settings_action,
+            bg="#ffcccc"
+        )
+        self.btn_reset.pack(pady=3, padx=10, fill="x")
+
+
+        frame_override = tk.LabelFrame(
+            self.root,
+            text="Override рівня"
+        )
+        frame_override.pack(pady=5, padx=10, fill="x")
+
+        self.level_var = tk.StringVar(value="MEDIUM")
+
+        tk.Radiobutton(
+            frame_override,
+            text="LOW (AES-128)",
+            variable=self.level_var,
+            value="LOW"
+        ).pack(anchor="w", padx=20)
+
+        tk.Radiobutton(
+            frame_override,
+            text="MEDIUM (AES-192)",
+            variable=self.level_var,
+            value="MEDIUM"
+        ).pack(anchor="w", padx=20)
+
+        tk.Radiobutton(
+            frame_override,
+            text="HIGH (AES-256)",
+            variable=self.level_var,
+            value="HIGH"
+        ).pack(anchor="w", padx=20)
+
+        self.btn_override = tk.Button(
+            frame_override,
+            text="Встановити override",
+            command=self.set_override_action
+        )
+        self.btn_override.pack(pady=5, padx=10, fill="x")
+
+        frame_other = tk.LabelFrame(
+            self.root,
+            text="Інформація"
+        )
+        frame_other.pack(pady=5, padx=10, fill="x")
+
+        btn_log = tk.Button(
+            frame_other,
+            text="Переглянути лог",
+            command=self.show_log
+        )
+        btn_log.pack(pady=5, padx=10, fill="x")
+
+        btn_exit = tk.Button(
+            frame_other,
+            text="Вихід",
+            command=self.root.quit,
+            bg="#cccccc"
+        )
+        btn_exit.pack(pady=5, padx=10, fill="x")
+
+        self.set_locked_mode(False)
+
+
+    def set_locked_mode(self, locked=True):
+
+        state = "disabled" if locked else "normal"
+
+        self.btn_encrypt.config(state=state)
+        self.btn_add_keyword.config(state=state)
+        self.btn_add_extension.config(state=state)
+        self.btn_add_dir.config(state=state)
+        self.btn_reset.config(state=state)
+        self.btn_override.config(state=state)
+
+
+    def check_dir_for_encrypted_files(self, path):
+
+        encrypted = []
+
+        for root, _, files in os.walk(path):
+
+            for f in files:
+
+                full = os.path.join(root, f)
+
+                if KURSOVA.is_file_encrypted(full):
+
+                    encrypted.append(full)
+
+                    if len(encrypted) > 5:
+                        encrypted.append("...")
+                        break
+
+            if len(encrypted) > 5:
+                break
+
+        return len(encrypted) > 0
+
+
+    def encrypt_action(self):
+
+        path = filedialog.askdirectory()
+
+        if not path:
+            return
+
+        if self.check_dir_for_encrypted_files(path):
+
+            self.set_locked_mode(True)
+
+            messagebox.showwarning(
+                "Locked Mode",
+                "У директорії вже є зашифровані файли.\n"
+                "Доступні лише функції розшифрування."
+            )
+
+            return
+
+        processed, skipped, failed = KURSOVA.process_directory(
+            path,
+            "encrypt",
+            public_key=self.public_key
+        )
+
+        if processed > 0:
+            self.set_locked_mode(True)
+
+        messagebox.showinfo(
+            "Результат",
+            f"Зашифровано: {processed}\n"
+            f"Пропущено: {skipped}\n"
+            f"Помилок: {failed}"
+        )
+
+    def decrypt_action(self):
+
+        password = simpledialog.askstring(
+            "Розшифрування",
+            "Введіть пароль:",
+            show="*"
+        )
+
+        if not password:
+            return
+
+        try:
+            private_key = KURSOVA.get_private_key(password)
+
+        except Exception:
+
+            messagebox.showerror(
+                "Помилка",
+                "Невірний пароль"
+            )
+
+            return
+
+        path = filedialog.askdirectory()
+
+        if not path:
+            return
+
+        processed, skipped, failed = KURSOVA.process_directory(
+            path,
+            "decrypt",
+            private_key=private_key
+        )
+
+        if not self.check_dir_for_encrypted_files(path):
+            self.set_locked_mode(False)
+
+        messagebox.showinfo(
+            "Результат",
+            f"Розшифровано: {processed}\n"
+            f"Пропущено: {skipped}\n"
+            f"Помилок: {failed}"
+        )
+
+    def set_override_action(self):
+
+        path = filedialog.askopenfilename()
+
+        if not path:
+            return
+
+        level = self.level_var.get()
+
+        mapping = {
+            "LOW": "LOW (AES-128)",
+            "MEDIUM": "MEDIUM (AES-192)",
+            "HIGH": "HIGH (AES-256)"
+        }
+
+        overrides = KURSOVA.load_overrides()
+
+        overrides[path] = mapping[level]
+
+        with open(KURSOVA.OVERRIDE_FILE, 'w') as f:
+            json.dump(overrides, f, indent=4)
+
+        messagebox.showinfo(
+            "OK",
+            f"Override встановлено: {level}"
+        )
+
+
+    def add_keyword_action(self):
+
+        new_word = simpledialog.askstring(
+            "Додати ключове слово",
+            "Введіть слово:"
+        )
+
+        if new_word:
+
+            keywords = KURSOVA.load_keywords()
+
+            new_word = new_word.lower().strip()
+
+            if new_word not in keywords:
+
+                keywords.append(new_word)
+
+                with open(KURSOVA.KEYWORDS_FILE, 'w') as f:
+                    json.dump(keywords, f, indent=4)
+
+                messagebox.showinfo(
+                    "OK",
+                    "Слово додано"
+                )
+
+    def add_extension_action(self):
+
+        ext = simpledialog.askstring(
+            "Додати розширення",
+            "Введіть розширення (.txt або txt):"
+        )
+
+        if not ext:
+            return
+
+        if not ext.startswith('.'):
+            ext = '.' + ext
+
+        level_window = tk.Toplevel(self.root)
+        level_window.title("Вибір рівня")
+        level_window.geometry("300x200")
+
+        selected_level = tk.StringVar(value="MEDIUM")
+
+        tk.Label(
+            level_window,
+            text="Виберіть рівень:"
+        ).pack(pady=10)
+
+        tk.Radiobutton(
+            level_window,
+            text="LOW (AES-128)",
+            variable=selected_level,
+            value="LOW"
+        ).pack(anchor="w", padx=20)
+
+        tk.Radiobutton(
+            level_window,
+            text="MEDIUM (AES-192)",
+            variable=selected_level,
+            value="MEDIUM"
+        ).pack(anchor="w", padx=20)
+
+        tk.Radiobutton(
+            level_window,
+            text="HIGH (AES-256)",
+            variable=selected_level,
+            value="HIGH"
+        ).pack(anchor="w", padx=20)
+
+        def save_extension():
+
+            exts = KURSOVA.load_extensions()
+
+            level = selected_level.get()
+
+            for lvl in exts:
+
+                if ext in exts[lvl]:
+                    exts[lvl].remove(ext)
+
+            exts[level].append(ext)
+
+            with open(KURSOVA.EXTENSIONS_FILE, 'w') as f:
+                json.dump(exts, f, indent=4)
+
+            messagebox.showinfo(
+                "OK",
+                f"{ext} -> {level}"
+            )
+
+            level_window.destroy()
+
+        tk.Button(
+            level_window,
+            text="Зберегти",
+            command=save_extension
+        ).pack(pady=15)
+
+
+    def add_important_dir_action(self):
+
+        path = filedialog.askdirectory()
+
+        if path:
+
+            dirs = KURSOVA.load_important_dirs()
+
+            if path not in dirs:
+
+                dirs.append(path)
+
+                with open(KURSOVA.IMPORTANT_DIRS_FILE, 'w') as f:
+                    json.dump(dirs, f, indent=4)
+
+                messagebox.showinfo(
+                    "OK",
+                    "Папку додано"
+                )
+
+
+    def reset_settings_action(self):
+
+        if messagebox.askyesno(
+            "Підтвердження",
+            "Скинути всі налаштування?"
+        ):
+
+            KURSOVA.reset_to_default()
+
+            messagebox.showinfo(
+                "OK",
+                "Налаштування скинуто"
+            )
+
+    def view_settings_action(self):
+
+        win = tk.Toplevel(self.root)
+        win.title("Поточні налаштування")
+        win.geometry("700x550")
+
+        text = scrolledtext.ScrolledText(
+            win,
+            width=80,
+            height=30
+        )
+
+        text.pack(
+            padx=10,
+            pady=10,
+            fill="both",
+            expand=True
+        )
+
+        text.insert(tk.END, "=" * 60 + "\n")
+        text.insert(tk.END, "КЛЮЧОВІ СЛОВА\n")
+        text.insert(tk.END, "=" * 60 + "\n")
+
+        for kw in KURSOVA.load_keywords():
+            text.insert(tk.END, f"• {kw}\n")
+
+        text.insert(tk.END, "\n")
+
+        text.insert(tk.END, "=" * 60 + "\n")
+        text.insert(tk.END, "РОЗШИРЕННЯ\n")
+        text.insert(tk.END, "=" * 60 + "\n")
+
+        exts = KURSOVA.load_extensions()
+
+        for level, values in exts.items():
+
+            text.insert(tk.END, f"\n[{level}]\n")
+
+            for value in values:
+                text.insert(tk.END, f"  • {value}\n")
+
+        text.insert(tk.END, "\n")
+
+        text.insert(tk.END, "=" * 60 + "\n")
+        text.insert(tk.END, "ВАЖЛИВІ ПАПКИ\n")
+        text.insert(tk.END, "=" * 60 + "\n")
+
+        dirs = KURSOVA.load_important_dirs()
+
+        if dirs:
+
+            for d in dirs:
+                text.insert(tk.END, f"• {d}\n")
+
+        else:
+            text.insert(tk.END, "Немає важливих папок\n")
+
+        text.insert(tk.END, "\n")
+
+        text.insert(tk.END, "=" * 60 + "\n")
+        text.insert(tk.END, "OVERRIDES\n")
+        text.insert(tk.END, "=" * 60 + "\n")
+
+        overrides = KURSOVA.load_overrides()
+
+        if overrides:
+
+            for fpath, level in overrides.items():
+
+                text.insert(tk.END, f"• {fpath}\n")
+                text.insert(tk.END, f"  -> {level}\n\n")
+
+        else:
+            text.insert(tk.END, "Немає override правил\n")
+
+        text.config(state="disabled")
+
+
+    def show_log(self):
+
+        win = tk.Toplevel(self.root)
+        win.title("Журнал подій")
+        win.geometry("750x500")
+
+        text = scrolledtext.ScrolledText(
+            win,
+            width=90,
+            height=30
+        )
+
+        text.pack(
+            padx=10,
+            pady=10,
+            fill="both",
+            expand=True
+        )
+
+        if not os.path.exists(KURSOVA.LOG_FILE):
+
+            text.insert(tk.END, "Лог порожній")
+            return
+
+        try:
+
+            with open(KURSOVA.LOG_FILE, 'r') as f:
+                logs = json.load(f)
+
+            if not logs:
+
+                text.insert(tk.END, "Лог порожній")
+                return
+
+            for entry in logs:
+
+                text.insert(tk.END, "=" * 60 + "\n")
+
+                text.insert(
+                    tk.END,
+                    f"Час: {entry.get('time', '-')}\n"
+                )
+
+                text.insert(
+                    tk.END,
+                    f"Дія: {entry.get('action', '-')}\n"
+                )
+
+                text.insert(
+                    tk.END,
+                    f"Файл: {entry.get('file', '-')}\n"
+                )
+
+                text.insert(
+                    tk.END,
+                    f"Рівень: {entry.get('level', '-')}\n"
+                )
+
+                text.insert(
+                    tk.END,
+                    f"Статус: {entry.get('status', '-')}\n"
+                )
+
+                if entry.get("details"):
+
+                    text.insert(
+                        tk.END,
+                        f"Деталі: {entry['details']}\n"
+                    )
+
+                text.insert(tk.END, "\n")
+
+        except Exception as e:
+
+            text.insert(
+                tk.END,
+                f"Помилка читання логу: {e}"
+            )
+
+        text.config(state="disabled")
+
+
+if __name__ == "__main__":
+
+    root = tk.Tk()
+
+    app = CryptoApp(root)
+
+    root.mainloop()
