@@ -1,0 +1,324 @@
+import os
+import json
+import time
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+
+OVERRIDE_FILE = "overrides.json"
+LOG_FILE = "activity_log.json"
+KEYWORDS_FILE = "keywords.json"
+EXTENSIONS_FILE = "extensions.json"
+IMPORTANT_DIRS_FILE = "important_dirs.json"
+SYSTEM_FILE = "system.json"
+
+MAGIC = b'CURE'
+VERSION = 1
+
+
+def log_event(action, file_path, level=None, status="OK", details=None):
+    log = []
+    if os.path.exists(LOG_FILE):
+        try:
+            with open(LOG_FILE, 'r') as f:
+                log = json.load(f)
+        except:
+            log = []
+    entry = {
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "action": action,
+        "file": file_path,
+        "level": level,
+        "status": status
+    }
+    if details:
+        entry["details"] = details
+    log.append(entry)
+    with open(LOG_FILE, 'w') as f:
+        json.dump(log, f, indent=4)
+
+
+def generate_rsa_keypair():
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key = private_key.public_key()
+    return private_key, public_key
+
+def serialize_public_key(public_key):
+    return public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+
+def serialize_encrypted_private_key(private_key, password):
+    return private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.BestAvailableEncryption(password)
+    ).decode()
+
+def load_public_key_from_pem(pem_str):
+    return serialization.load_pem_public_key(pem_str.encode())
+
+def load_private_key_from_pem(pem_str, password):
+    return serialization.load_pem_private_key(pem_str.encode(), password=password)
+
+def encrypt_with_public_key(public_key, data):
+    return public_key.encrypt(
+        data,
+        asym_padding.OAEP(
+            mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+
+def decrypt_with_private_key(private_key, ciphertext):
+    return private_key.decrypt(
+        ciphertext,
+        asym_padding.OAEP(
+            mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+
+
+def system_exists():
+    return os.path.exists(SYSTEM_FILE)
+
+def create_new_system(password):
+    priv, pub = generate_rsa_keypair()
+    public_pem = serialize_public_key(pub)
+    encrypted_priv_pem = serialize_encrypted_private_key(priv, password.encode())
+    system_data = {
+        "public_key": public_pem,
+        "encrypted_private_key": encrypted_priv_pem
+    }
+    with open(SYSTEM_FILE, 'w') as f:
+        json.dump(system_data, f, indent=4)
+    return system_data
+
+def load_system_data():
+    with open(SYSTEM_FILE, 'r') as f:
+        return json.load(f)
+
+def get_public_key():
+    data = load_system_data()
+    return load_public_key_from_pem(data["public_key"])
+
+def get_private_key(password):
+    data = load_system_data()
+    return load_private_key_from_pem(data["encrypted_private_key"], password.encode())
+
+
+def load_overrides():
+    if os.path.exists(OVERRIDE_FILE):
+        with open(OVERRIDE_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+def load_keywords():
+    default = ['password', 'passport', 'finance', 'salary', 'private']
+    if os.path.exists(KEYWORDS_FILE):
+        with open(KEYWORDS_FILE, 'r') as f:
+            return json.load(f)
+    with open(KEYWORDS_FILE, 'w') as f:
+        json.dump(default, f, indent=4)
+    return default
+
+def load_extensions():
+    default = {
+        "HIGH": ['.docx', '.pdf', '.xlsx', '.sql', '.db'],
+        "MEDIUM": ['.txt', '.json', '.csv'],
+        "LOW": ['.mp4', '.mp3', '.jpg', '.png']
+    }
+    if os.path.exists(EXTENSIONS_FILE):
+        with open(EXTENSIONS_FILE, 'r') as f:
+            return json.load(f)
+    with open(EXTENSIONS_FILE, 'w') as f:
+        json.dump(default, f, indent=4)
+    return default
+
+def load_important_dirs():
+    if os.path.exists(IMPORTANT_DIRS_FILE):
+        with open(IMPORTANT_DIRS_FILE, 'r') as f:
+            return json.load(f)
+    return []
+
+
+def classify_file(file_path):
+    overrides = load_overrides()
+    keywords = load_keywords()
+    extensions = load_extensions()
+    important_dirs = load_important_dirs()
+
+    if file_path in overrides:
+        level = overrides[file_path]
+        if "256" in level:
+            return level, 32
+        elif "192" in level:
+            return level, 24
+        return level, 16
+
+    path_lower = file_path.lower()
+    name = os.path.basename(path_lower)
+    _, ext = os.path.splitext(name)
+    abs_file = os.path.abspath(file_path).lower()
+
+    for folder in important_dirs:
+        if abs_file.startswith(os.path.abspath(folder).lower()):
+            return "HIGH (AES-256)", 32
+
+    if any(k in name for k in keywords):
+        return "HIGH (AES-256)", 32
+
+    if ext in extensions["HIGH"]:
+        return "HIGH (AES-256)", 32
+    elif ext in extensions["LOW"]:
+        return "LOW (AES-128)", 16
+    else:
+        return "MEDIUM (AES-192)", 24
+
+
+def is_file_encrypted(file_path):
+    try:
+        with open(file_path, 'rb') as f:
+            return f.read(4) == MAGIC
+    except:
+        return False
+
+
+
+def encrypt_file(file_path, public_key, level_info):
+    if is_file_encrypted(file_path):
+        print(f"[SKIP] {file_path} - вже зашифровано")
+        return False
+
+    try:
+        level_str, key_size = level_info
+        fek = os.urandom(key_size)
+        encrypted_fek = encrypt_with_public_key(public_key, fek)
+
+        with open(file_path, 'rb') as f:
+            data = f.read()
+
+        nonce = os.urandom(12)
+        aes = AESGCM(fek)
+        ciphertext = aes.encrypt(nonce, data, None)
+
+        fek_len = len(encrypted_fek).to_bytes(2, 'big')
+        header = MAGIC + bytes([VERSION]) + fek_len + encrypted_fek + nonce
+
+        temp_path = file_path + ".enc"
+        with open(temp_path, 'wb') as f:
+            f.write(header + ciphertext)
+        os.replace(temp_path, file_path)
+
+        log_event("ENCRYPT", file_path, level_str)
+        print(f"[ENC] {file_path} | {level_str}")
+        return True
+
+    except Exception as e:
+        print(f"[ERR] {file_path}: {e}")
+        return False
+
+
+def decrypt_file(file_path, private_key):
+    if not is_file_encrypted(file_path):
+        print(f"[SKIP] {file_path} - не є зашифрованим (немає магії)")
+        return False
+
+    try:
+        with open(file_path, 'rb') as f:
+            raw = f.read()
+
+        version = raw[4]
+
+        if version != VERSION:
+            raise ValueError("Unsupported file version")
+
+        fek_len = int.from_bytes(raw[5:7], 'big')
+        encrypted_fek = raw[7:7+fek_len]
+        nonce = raw[7+fek_len:7+fek_len+12]
+        ciphertext = raw[7+fek_len+12:]
+
+        fek = decrypt_with_private_key(private_key, encrypted_fek)
+
+        aes = AESGCM(fek)
+        data = aes.decrypt(nonce, ciphertext, None)
+
+        temp_path = file_path + ".dec"
+        with open(temp_path, 'wb') as f:
+            f.write(data)
+        os.replace(temp_path, file_path)
+
+        log_event("DECRYPT", file_path)
+        print(f"[DEC] {file_path}")
+        return True
+
+    except Exception as e:
+        print(f"[FAIL] {file_path}: {e}")
+        return False
+
+
+def process_directory(path, mode, public_key=None, private_key=None):
+    processed = 0
+    skipped = 0
+    failed = 0
+
+    for root, _, files in os.walk(path):
+        for file in files:
+            if file in [OVERRIDE_FILE, LOG_FILE, SYSTEM_FILE] or file.endswith(".py"):
+                continue
+
+            full_path = os.path.join(root, file)
+
+            if mode == "encrypt":
+                if is_file_encrypted(full_path):
+                    print(f"[SKIP] {full_path} - вже зашифровано")
+                    skipped += 1
+                    continue
+
+                level, key_size = classify_file(full_path)
+                if encrypt_file(full_path, public_key, (level, key_size)):
+                    processed += 1
+                else:
+                    failed += 1
+
+            elif mode == "decrypt":
+                if not is_file_encrypted(full_path):
+                    skipped += 1
+                    continue
+                if decrypt_file(full_path, private_key):
+                    processed += 1
+                else:
+                    failed += 1
+
+    print(f"\n=== {mode.upper()} завершено ===")
+    print(f"Оброблено: {processed}\nПропущено: {skipped}\nПомилок: {failed}")
+    return processed, skipped, failed
+
+
+
+def reset_to_default():
+    default_keywords = ['password', 'passport', 'finance', 'salary', 'private']
+    with open(KEYWORDS_FILE, 'w') as f:
+        json.dump(default_keywords, f, indent=4)
+
+    default_extensions = {
+        "HIGH": ['.docx', '.pdf', '.xlsx', '.sql', '.db'],
+        "MEDIUM": ['.txt', '.json', '.csv'],
+        "LOW": ['.mp4', '.mp3', '.jpg', '.png']
+    }
+    with open(EXTENSIONS_FILE, 'w') as f:
+        json.dump(default_extensions, f, indent=4)
+
+    with open(IMPORTANT_DIRS_FILE, 'w') as f:
+        json.dump([], f, indent=4)
+
+    with open(OVERRIDE_FILE, 'w') as f:
+        json.dump({}, f, indent=4)
+
+    print("[OK] Налаштування скинуто")
