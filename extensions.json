@@ -1,0 +1,20 @@
+{
+    "HIGH": [
+        ".docx",
+        ".pdf",
+        ".xlsx",
+        ".sql",
+        ".db"
+    ],
+    "MEDIUM": [
+        ".txt",
+        ".json",
+        ".csv"
+    ],
+    "LOW": [
+        ".mp4",
+        ".mp3",
+        ".jpg",
+        ".png"
+    ]
+}
